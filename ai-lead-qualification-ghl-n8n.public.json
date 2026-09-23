@@ -1,0 +1,449 @@
+{
+  "name": "AI Lead Qualification - GHL + n8n (Public Template)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "YOUR_GHL_WEBHOOK_PATH",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1318575c-fa5e-416f-9ecc-f9371a22387a",
+      "name": "Receive GHL Opportunity Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -960,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $json;\nconst body = request.body ?? request;\n\nconst nestedContact = body.contact ?? {};\nconst nestedHasIdentity = Boolean(\n  nestedContact.id ||\n  nestedContact.contact_id ||\n  nestedContact.email ||\n  nestedContact.phone\n);\n\nconst contact = nestedHasIdentity ? nestedContact : body;\nconst opportunity = body.opportunity ?? {};\n\nconst custom =\n  contact.customFields ??\n  contact.custom_fields ??\n  body.customFields ??\n  body.custom_fields ??\n  body.customData ??\n  {};\n\nconst readField = (...keys) => {\n  for (const key of keys) {\n    if (body[key] !== undefined && body[key] !== \"\") return body[key];\n    if (contact[key] !== undefined && contact[key] !== \"\") return contact[key];\n\n    if (Array.isArray(custom)) {\n      const match = custom.find(\n        (field) =>\n          field.id === key ||\n          field.key === key ||\n          field.name === key\n      );\n\n      const value = match?.value ?? match?.fieldValue;\n      if (value !== undefined && value !== \"\") return value;\n    } else if (custom[key] !== undefined && custom[key] !== \"\") {\n      return custom[key];\n    }\n  }\n\n  return null;\n};\n\nconst derivedName = [\n  contact.first_name ?? contact.firstName,\n  contact.last_name ?? contact.lastName,\n].filter(Boolean).join(\" \");\n\nreturn [{\n  json: {\n    source_system: \"gohighlevel\",\n    received_at: new Date().toISOString(),\n\n    contact_id:\n      contact.contact_id ??\n      contact.contactId ??\n      contact.id ??\n      body.contact_id ??\n      body.contactId ??\n      null,\n\n    opportunity_id:\n      opportunity.id ??\n      body.opportunity_id ??\n      body.opportunityId ??\n      readField(\"opportunity_id\") ??\n      (body.opportunity_name ? body.id : null),\n\n    first_name:\n      contact.first_name ??\n      contact.firstName ??\n      body.first_name ??\n      null,\n\n    last_name:\n      contact.last_name ??\n      contact.lastName ??\n      body.last_name ??\n      null,\n\n    full_name:\n      contact.full_name ??\n      contact.fullName ??\n      body.full_name ??\n      (derivedName || null),\n\n    email: contact.email ?? body.email ?? null,\n    phone: contact.phone ?? body.phone ?? null,\n\n    lead_source: readField(\"Lead Source\", \"lead_source\"),\n    interested_in: readField(\"Interested In\", \"interested_in\"),\n    preferred_contact_method: readField(\n      \"Preferred Contact Method\",\n      \"preferred_contact_method\"\n    ),\n    lead_type: readField(\"Lead Type\", \"lead_type\"),\n\n    message:\n      body.message?.body ??\n      body.message ??\n      contact.message ??\n      null,\n\n    pipeline_id:\n      opportunity.pipelineId ??\n      body.pipeline_id ??\n      body.pipelineId ??\n      null,\n\n    pipeline_stage_id:\n      opportunity.pipelineStageId ??\n      body.pipeline_stage_id ??\n      body.pipelineStageId ??\n      null,\n\n    pipeline_name:\n      body.pipeline_name ??\n      readField(\"pipeline_name\"),\n\n    pipeline_stage_name:\n      body.pipeline_stage_name ??\n      body.pipleline_stage ??\n      readField(\"pipeline_stage_name\"),\n\n    raw_payload: body,\n  },\n}];"
+      },
+      "id": "ecf898a4-a573-4723-bc1e-0b8e9582183b",
+      "name": "Normalize Incoming Lead Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -720,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validation rule for this project: a lead needs a CRM contact ID and at least one contact method.\n// A missing buying signal is NOT invalid; it is handled later as Needs Review.\n\nconst lead = $json;\nconst errors = [];\nif (!lead.contact_id) errors.push('Missing GHL contact ID');\nif (!lead.email && !lead.phone) errors.push('Missing both email and phone');\n\nreturn [{\n  json: {\n    ...lead,\n    validation: {\n      valid: errors.length === 0,\n      errors\n    }\n  }\n}];"
+      },
+      "id": "49acf380-c7b2-420c-ba75-76b95b1c914f",
+      "name": "Validate Required Lead Fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -480,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "fb78a27e-75e5-40a1-aeb0-c49a09c0e21c",
+              "leftValue": "={{ $json.validation.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "177621e2-b9d7-433d-a181-21b0a0d5bde9",
+      "name": "Check Lead Eligibility",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -240,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// This is the contract the later AI node must return.\n// It prevents free-text AI answers from controlling CRM automation.\n\nreturn [{\n  json: {\n    ...$json,\n    ai_input: {\n      lead: {\n        name: $json.full_name,\n        email: $json.email,\n        phone: $json.phone,\n        source: $json.lead_source,\n        interested_in: $json.interested_in,\n        lead_type: $json.lead_type,\n        message: $json.message\n      },\n      required_output: {\n        temperature: ['Hot', 'Warm', 'Cold'],\n        qualification_status: ['Qualified', 'Partially Qualified', 'Not Qualified', 'Needs Review'],\n        intent_score: 'integer from 0 to 100',\n        timeline: ['Immediate', 'This Week', 'This Month', 'No Urgency', 'Unknown'],\n        recommended_action: 'short action for sales team',\n        reason: 'short evidence-based explanation'\n      }\n    }\n  }\n}];"
+      },
+      "id": "a99d11e9-c61a-44ce-a364-857f143faa45",
+      "name": "Build AI Qualification Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-5-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-5-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an AI lead qualification engine for a sales team.\n\nAnalyze only the lead information provided in the user message. Do not invent facts, budget, urgency, pain points, or intent.\n\nUse these configurable demo rules:\n- Hot: clear business need or problem AND strong buying intent AND a near-term timeline (Immediate or This Week).\n- Warm: relevant interest or need exists, but buying intent, timeline, budget, or problem details are incomplete.\n- Cold: vague interest, weak intent, no clear business need, or no actionable timeline.\n- If critical information is missing or contradictory, use \"Needs Review\".\n\nQualification status:\n- Qualified: clear relevant need and actionable buying intent.\n- Partially Qualified: relevant interest exists but important details are missing.\n- Not Qualified: no relevant need or buying intent is evident.\n- Needs Review: data is missing, contradictory, or insufficient for a safe decision.\n\nIntent score is a configurable 0-100 estimate based only on the available buying signals. It is not a universal business score.\n\nReturn ONLY valid JSON. Do not use markdown, code fences, commentary, or extra keys.\n\nUse this exact schema:\n{\n  \"temperature\": \"Hot | Warm | Cold\",\n  \"qualification_status\": \"Qualified | Partially Qualified | Not Qualified | Needs Review\",\n  \"intent_score\": 0,\n  \"timeline\": \"Immediate | This Week | This Month | No Urgency | Unknown\",\n  \"recommended_action\": \"short sales action\",\n  \"reason\": \"short evidence-based explanation using only provided lead data\"\n}"
+            },
+            {
+              "content": "=Evaluate this CRM lead using the system rules.\n\nName: {{ $json.full_name }}\nEmail: {{ $json.email }}\nPhone: {{ $json.phone }}\nLead source: {{ $json.lead_source }}\nInterested in: {{ $json.interested_in }}\nLead type: {{ $json.lead_type }}\nPreferred contact method: {{ $json.preferred_contact_method }}\nMessage: {{ $json.message || \"Not provided\" }}\nPipeline: {{ $json.pipeline_name }}\nCurrent stage: {{ $json.pipeline_stage_name }}\n\nReturn only the required JSON object."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "textFormat": {
+            "textOptions": {
+              "type": "json_schema",
+              "name": "lead_qualification",
+              "schema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"temperature\": {\n      \"type\": \"string\",\n      \"enum\": [\"Hot\", \"Warm\", \"Cold\"]\n    },\n    \"qualification_status\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"Qualified\",\n        \"Partially Qualified\",\n        \"Not Qualified\",\n        \"Needs Review\"\n      ]\n    },\n    \"intent_score\": {\n      \"type\": \"integer\",\n      \"minimum\": 0,\n      \"maximum\": 100\n    },\n    \"timeline\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"Immediate\",\n        \"This Week\",\n        \"This Month\",\n        \"No Urgency\",\n        \"Unknown\"\n      ]\n    },\n    \"recommended_action\": {\n      \"type\": \"string\"\n    },\n    \"reason\": {\n      \"type\": \"string\"\n    }\n  },\n  \"required\": [\n    \"temperature\",\n    \"qualification_status\",\n    \"intent_score\",\n    \"timeline\",\n    \"recommended_action\",\n    \"reason\"\n  ],\n  \"additionalProperties\": false\n}",
+              "strict": true
+            }
+          }
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        224,
+        0
+      ],
+      "id": "6dd68f3c-d3f2-4cf7-b0b7-9ba9ad4972a9",
+      "name": "AI Lead Qualification"
+    },
+    {
+      "parameters": {
+        "jsCode": "const originalLead = $('Build AI Qualification Prompt').first().json;\n\nreturn $input.all().map((item) => {\n  const qualification = item.json.output?.[0]?.content?.[0]?.text;\n\n  if (!qualification || typeof qualification !== 'object') {\n    throw new Error('AI qualification output is missing or invalid');\n  }\n\n  return {\n    json: {\n      ...originalLead,\n      ...qualification,\n      ai_model: 'gpt-5-mini',\n      qualification_processed_at: new Date().toISOString(),\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        528,
+        0
+      ],
+      "id": "e4f81dcc-af27-4275-b369-f2134e4ee171",
+      "name": "Parse AI Qualification Result"
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ 'https://services.leadconnectorhq.com/opportunities/' + $('Parse AI Qualification Result').first().json.opportunity_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Version",
+              "value": "v3"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "=json",
+        "bodyParameters": {
+          "parameters": [
+            {}
+          ]
+        },
+        "jsonBody": "={{ {\n  customFields: [\n    {\n      id: 'YOUR_GHL_FIELD_ID_LEAD_TEMPERATURE',\n      fieldValue: $('Parse AI Qualification Result').first().json.temperature\n    },\n    {\n      id: 'YOUR_GHL_FIELD_ID_QUALIFICATION_STATUS',\n      fieldValue: $('Parse AI Qualification Result').first().json.qualification_status\n    },\n    {\n      id: 'YOUR_GHL_FIELD_ID_TIMELINE',\n      fieldValue: $('Parse AI Qualification Result').first().json.timeline\n    }\n  ]\n} }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1008,
+        48
+      ],
+      "id": "691580f6-8963-41c4-b46e-d41a7e090fee",
+      "name": "Update Opportunity in GoHighLevel"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {\n  status: 'accepted',\n  contact_id: $('Parse AI Qualification Result').first().json.contact_id,\n  opportunity_id: $('Parse AI Qualification Result').first().json.opportunity_id,\n  qualification: {\n    temperature: $('Parse AI Qualification Result').first().json.temperature,\n    qualification_status: $('Parse AI Qualification Result').first().json.qualification_status,\n    intent_score: $('Parse AI Qualification Result').first().json.intent_score,\n    timeline: $('Parse AI Qualification Result').first().json.timeline,\n    recommended_action: $('Parse AI Qualification Result').first().json.recommended_action,\n    reason: $('Parse AI Qualification Result').first().json.reason\n  },\n  crm_sync: 'completed',\n  message: 'Lead qualified and synced to GoHighLevel'\n} }}",
+        "options": {}
+      },
+      "id": "9f11ec97-ac25-4037-8c13-80bee088e38f",
+      "name": "Return Qualification Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1408,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'needs_review', contact_id: $json.contact_id, validation_errors: $json.validation.errors } }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "39ed32c4-87db-40eb-bcda-c758c5459595",
+      "name": "Return Validation Review Required",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://hooks.zapier.com/hooks/catch/YOUR_ZAPIER_HOOK/",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  full_name: $('Parse AI Qualification Result').first().json.full_name,\n  email: $('Parse AI Qualification Result').first().json.email,\n  phone: $('Parse AI Qualification Result').first().json.phone,\n  interested_in: $('Parse AI Qualification Result').first().json.interested_in,\n  temperature: $('Parse AI Qualification Result').first().json.temperature,\n  qualification_status: $('Parse AI Qualification Result').first().json.qualification_status,\n  intent_score: $('Parse AI Qualification Result').first().json.intent_score,\n  timeline: $('Parse AI Qualification Result').first().json.timeline,\n  recommended_action: $('Parse AI Qualification Result').first().json.recommended_action,\n  opportunity_id: $('Parse AI Qualification Result').first().json.opportunity_id\n} }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1200,
+        0
+      ],
+      "id": "74cd8acc-f73c-42aa-98a9-674349c6b699",
+      "name": "Send Lead Alert to Zapier"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://services.leadconnectorhq.com/contacts/' + $json.contact_id + '/tasks' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Version",
+              "value": "v3"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  title: `Call ${$json.full_name} within 15 minutes — Hot Qualified lead`,\n  body: `High-priority ${$json.interested_in} lead.\nIntent score: ${$json.intent_score}\nRecommended action: ${$json.recommended_action}\nEmail: ${$json.email}\nPhone: ${$json.phone}`,\n  dueDate: new Date(Date.now() + 15 * 60 * 1000).toISOString(),\n  completed: false\n} }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        896,
+        -288
+      ],
+      "id": "cff4f0ca-e625-4f80-b8a8-fe6bf8269961",
+      "name": "Create Priority Follow-up Task"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "50f4db0e-3441-4771-acc4-4e6dd94c1f10",
+              "leftValue": "={{ $json.temperature }}",
+              "rightValue": "Hot",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            },
+            {
+              "id": "d1e69ea8-aee7-4b3a-bf73-518f7979cfc1",
+              "leftValue": "={{ $json.qualification_status }}",
+              "rightValue": "Qualified",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        752,
+        0
+      ],
+      "id": "6da85063-798e-41ad-a56a-eaa926671fdd",
+      "name": "Is Hot Qualified Lead?"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Receive GHL Opportunity Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Incoming Lead Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Incoming Lead Data": {
+      "main": [
+        [
+          {
+            "node": "Validate Required Lead Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Required Lead Fields": {
+      "main": [
+        [
+          {
+            "node": "Check Lead Eligibility",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Lead Eligibility": {
+      "main": [
+        [
+          {
+            "node": "Build AI Qualification Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Validation Review Required",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build AI Qualification Prompt": {
+      "main": [
+        [
+          {
+            "node": "AI Lead Qualification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Lead Qualification": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Qualification Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Qualification Result": {
+      "main": [
+        [
+          {
+            "node": "Is Hot Qualified Lead?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Opportunity in GoHighLevel": {
+      "main": [
+        [
+          {
+            "node": "Send Lead Alert to Zapier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Lead Alert to Zapier": {
+      "main": [
+        [
+          {
+            "node": "Return Qualification Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Priority Follow-up Task": {
+      "main": [
+        [
+          {
+            "node": "Update Opportunity in GoHighLevel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Hot Qualified Lead?": {
+      "main": [
+        [
+          {
+            "node": "Create Priority Follow-up Task",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Opportunity in GoHighLevel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "nodeGroups": [],
+  "tags": []
+}
