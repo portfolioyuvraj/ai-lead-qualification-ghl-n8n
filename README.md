@@ -38,3 +38,10 @@ GoHighLevel
   → Hot Lead Decision
   → Priority Task + CRM Update
   → Slack Alert
+  ## Screenshots
+
+### n8n Lead Qualification Workflow
+![n8n Lead Qualification Workflow](n8n-lead-qualification-workflow.png)
+
+### GoHighLevel AI Qualification Result
+![GoHighLevel AI Qualification Result](ghl-ai-qualification-result.png)
